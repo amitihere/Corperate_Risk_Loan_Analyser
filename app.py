@@ -198,3 +198,198 @@ label {
     text-align: center;
 }
 .placeholder-text {
+    font-size: 0.82rem;
+    color: #2a3a50;
+    line-height: 1.6;
+}
+
+.stProgress > div > div > div > div { border-radius: 2px !important; }
+
+hr {
+    border: none !important;
+    border-top: 1px solid rgba(255,255,255,0.05) !important;
+    margin: 2rem 0 1rem 0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+@st.cache_resource(show_spinner=False)
+def load_model():
+    return train_model()
+
+
+st.markdown("""
+<div class="page-header">
+    <p class="page-title">Corporate Loan Risk Analyzer</p>
+    <p class="page-subtitle">
+        Rule-based scoring combined with logistic regression to assess corporate credit risk
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+with st.spinner("Loading model..."):
+    model, scaler = load_model()
+
+
+left_col, right_col = st.columns([1, 1.1], gap="large")
+
+with left_col:
+    st.markdown('<div class="section-title">Company Financials</div>', unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        revenue           = st.number_input("Revenue (Cr)",           min_value=0.0, value=500.0, step=10.0, format="%.1f")
+        total_debt        = st.number_input("Total Debt (Cr)",        min_value=0.0, value=200.0, step=10.0, format="%.1f")
+        current_assets    = st.number_input("Current Assets (Cr)",    min_value=0.0, value=150.0, step=10.0, format="%.1f")
+        interest_expense  = st.number_input("Interest Expense (Cr)",  min_value=0.0, value=20.0,  step=1.0,  format="%.1f")
+
+    with c2:
+        net_profit         = st.number_input("Net Profit (Cr)",          value=60.0,  step=5.0,  format="%.1f")
+        total_equity       = st.number_input("Total Equity (Cr)",  min_value=0.0, value=250.0, step=10.0, format="%.1f")
+        current_liabilities = st.number_input("Current Liabilities (Cr)", min_value=0.0, value=120.0, step=10.0, format="%.1f")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    btn_col, reset_col = st.columns([3, 1])
+    with btn_col:
+        analyze = st.button("Run Analysis", use_container_width=True)
+    with reset_col:
+        st.button("Reset", use_container_width=True)
+
+    if revenue == 0:
+        st.warning("Revenue is zero. Profit margin cannot be computed accurately.")
+    if total_equity == 0:
+        st.warning("Total equity is zero. Debt-to-equity ratio will reflect maximum risk.")
+    if interest_expense == 0:
+        st.info("No interest expense entered. Interest coverage will default to zero.")
+
+
+with right_col:
+    if analyze:
+        with st.spinner("Running analysis..."):
+
+            ratios = compute_all_ratios(
+                revenue=revenue,
+                net_profit=net_profit,
+                total_debt=total_debt,
+                total_equity=total_equity,
+                current_assets=current_assets,
+                current_liabilities=current_liabilities,
+                interest_expense=interest_expense,
+            )
+
+            scoring    = compute_risk_score(ratios)
+            risk_score = scoring["score"]
+
+            features = [
+                ratios["debt_to_equity"],
+                ratios["current_ratio"],
+                ratios["profit_margin"],
+                ratios["interest_coverage"],
+            ]
+            prob           = predict_probability(model, scaler, features)
+            decision_result = make_decision(prob)
+            insight        = generate_ml_insight(prob)
+
+        # Computed Ratios
+        st.markdown('<div class="section-title">Computed Ratios</div>', unsafe_allow_html=True)
+
+        ratio_cols = st.columns(4)
+        ratio_items = [
+            ("D / E Ratio",       ratios["debt_to_equity"],   "> 2 is elevated"),
+            ("Current Ratio",     ratios["current_ratio"],    "< 1 is a concern"),
+            ("Profit Margin",     ratios["profit_margin"],    "< 10% is weak"),
+            ("Interest Coverage", ratios["interest_coverage"], "< 2x is stressed"),
+        ]
+
+        for col, (label, value, hint) in zip(ratio_cols, ratio_items):
+            with col:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-number" style="color:#5a8fd4">{value:.2f}</div>
+                    <div class="metric-label">{label}</div>
+                    <div class="metric-hint">{hint}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Risk Score and ML Probability
+        st.markdown('<div class="section-title">Risk Assessment</div>', unsafe_allow_html=True)
+
+        score_color = "#34d399" if risk_score <= 25 else ("#fbbf24" if risk_score <= 55 else "#f87171")
+        prob_color  = "#34d399" if prob < 0.30      else ("#fbbf24" if prob <= 0.60      else "#f87171")
+
+        score_col, prob_col = st.columns(2)
+
+        with score_col:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-number" style="color:{score_color}; font-size:2.8rem">{risk_score}</div>
+                <div class="metric-label">Rule-Based Risk Score</div>
+                <div class="metric-hint">0 — minimal &nbsp;·&nbsp; 100 — critical</div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.progress(risk_score / 100)
+
+        with prob_col:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-number" style="color:{prob_color}; font-size:2.8rem">{prob * 100:.1f}%</div>
+                <div class="metric-label">Default Probability</div>
+                <div class="metric-hint">Logistic Regression estimate</div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.progress(prob)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Final Decision
+        dec       = decision_result["decision"]
+        css_class = {"APPROVE": "decision-approve", "REVIEW": "decision-review", "REJECT": "decision-reject"}[dec]
+
+        st.markdown(f"""
+        <div class="decision-block {css_class}">
+            <div class="decision-label">{dec}</div>
+            <div class="decision-description">{decision_result["description"]}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Risk Flags
+        st.markdown('<div class="section-title" style="margin-top:1.5rem">Risk Flags</div>', unsafe_allow_html=True)
+
+        if scoring["triggered"]:
+            for condition in scoring["triggered"]:
+                st.markdown(f'<div class="rule-flag">{condition}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div class="rule-flag rule-pass">All rule-based checks passed. No risk flags triggered.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Model Insight
+        st.markdown(f"""
+        <div class="insight-panel">
+            <div class="insight-label">Model Insight</div>
+            {insight}
+        </div>
+        """, unsafe_allow_html=True)
+
+    else:
+        st.markdown("""
+        <div class="placeholder-panel">
+            <div class="placeholder-text">
+                Enter company financials and click <strong>Run Analysis</strong><br>to generate the risk report.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown("""
+<p style="text-align:center; color:#1e2a3a; font-size:0.68rem; letter-spacing:0.06em; text-transform:uppercase;">
+    Corporate Loan Risk Analyzer &nbsp;·&nbsp; Logistic Regression + Rule Engine &nbsp;·&nbsp; Fintech MVP
+</p>
+""", unsafe_allow_html=True)
